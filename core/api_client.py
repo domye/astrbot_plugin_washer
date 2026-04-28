@@ -149,7 +149,7 @@ class WasherApiClient:
         
         if building_filter:
             building_filter_upper = building_filter.upper()
-            devices = [d for d in devices if building_filter_upper in d.name.upper()]
+            devices = [d for d in devices if d.name.upper().startswith(building_filter_upper)]
         
         available_devices = [d for d in devices if d.is_available]
         return {
