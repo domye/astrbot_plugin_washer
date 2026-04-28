@@ -123,12 +123,8 @@ class WasherPlugin(Star):
         if not position_id:
             return None
 
-        building_filter = ""
-        if building_num or direction:
-            building_filter = f"{building}{building_num or ''}{direction}"
-            display_name = f"{building}{building_num or ''}{direction}栋{floor}楼"
-        else:
-            display_name = f"{building}栋{floor}楼"
+        building_filter = f"{building}{building_num or ''}{direction}"
+        display_name = f"{building}{building_num or ''}{direction}栋{floor}楼"
 
         return (position_id, floor_code, display_name, building_filter)
 
@@ -290,11 +286,7 @@ class WasherPlugin(Star):
 
     @filter.command("洗衣机设置")
     async def settings(self, event: AstrMessageEvent, action: str = "", value: str = ""):
-        """管理员设置（轮询间隔等）"""
-        if not await self._is_admin(event):
-            yield event.plain_result("仅管理员可执行此操作")
-            return
-
+        """设置（轮询间隔等）"""
         session_id = event.unified_msg_origin
 
         if action == "间隔":
