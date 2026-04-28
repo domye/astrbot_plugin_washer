@@ -95,7 +95,7 @@ class PollService:
         available_devices = [d for d in devices if d.is_available]
 
         chain = MessageChain()
-        chain.at(user_id)
+        chain.chain.append(At(qq=str(user_id)))
         
         if available_devices:
             available_names = [d.name for d in available_devices]
