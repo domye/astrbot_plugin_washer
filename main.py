@@ -133,29 +133,33 @@ class WasherPlugin(Star):
         return (position_id, floor_code, display_name, building_filter)
 
     @filter.command("洗衣机订阅")
-    async def subscribe(self, event: AstrMessageEvent, location: str = ""):
+    async def subscribe(self, event: AstrMessageEvent, building: str = "", floor: str = ""):
         """订阅洗衣机通知
         
         用法: 
-        /洗衣机订阅 J1西4楼 - 订阅 J1 西边 4 楼
-        /洗衣机订阅 J14楼 - 订阅 J1 栋 4 楼
-        /洗衣机订阅 J4 - 订阅 J 栋 4 楼所有洗衣机
+        /洗衣机订阅 J1 4 - 订阅 J1 栋 4 楼
+        /洗衣机订阅 A 5 - 订阅 A 栋 5 楼
+        /洗衣机订阅 J1西 4 - 订阅 J1 西边 4 楼
         """
-        if not location:
+        if not building:
             yield event.plain_result(
                 "请输入位置，例如:\n"
-                "/洗衣机订阅 J1西4楼\n"
-                "/洗衣机订阅 J14楼\n"
-                "/洗衣机订阅 J4"
+                "/洗衣机订阅 J1 4\n"
+                "/洗衣机订阅 A 5\n"
+                "/洗衣机订阅 J1西 4"
             )
             return
+
+        location = building
+        if floor:
+            location = f"{building}{floor}"
 
         parsed = self._parse_location(location)
         if not parsed:
             yield event.plain_result(
                 "位置格式错误，支持:\n"
-                "A-L栋，楼层1-6\n"
-                "例如: J1西4楼 或 J4"
+                "楼栋 A-L，楼层 1-6\n"
+                "例如: /洗衣机订阅 J1 4"
             )
             return
 
@@ -215,6 +219,24 @@ class WasherPlugin(Star):
             status_icon = "✅" if device.is_available else "❌"
             lines.append(f"{status_icon} {device.name}: {device.status_text}")
 
+        if available == 0:
+            in_use_devices = [d for d in devices if d.state == 2 and d.remaining_seconds]
+            if in_use_devices:
+                earliest = min(in_use_devices, key=lambda d: d.remaining_seconds or float('inf'))
+                remaining = earliest.remaining_seconds
+                if remaining and remaining > 0:
+                    minutes = remaining // 60
+                    lines.append("")
+                    lines.append(f"⏰ 最早空闲: {earliest.name}")
+                    lines.append(f"   预计 {minutes} 分钟后空闲")
+                    lines.append("   我会在那时提醒你!")
+
+                    existing_reminder = await self.subscription_mgr.get_reminder(session_id, user_id)
+                    if not existing_reminder:
+                        await self.poll_service.schedule_reminder(
+                            session_id, user_id, earliest.name, remaining
+                        )
+
         yield event.plain_result("\n".join(lines))
 
     @filter.command("洗衣机取消")
@@ -252,9 +274,10 @@ class WasherPlugin(Star):
         msg = (
             "【洗衣机订阅插件帮助】\n"
             "\n"
-            "/洗衣机订阅 <位置> - 订阅洗衣机通知\n"
-            "  精确订阅: A西5楼 / J1西4楼 / J14楼\n"
-            "  整栋订阅: A5 / J4\n"
+            "/洗衣机订阅 <楼栋> <楼层>\n"
+            "  示例: /洗衣机订阅 J1 4\n"
+            "  示例: /洗衣机订阅 A 5\n"
+            "  示例: /洗衣机订阅 J1西 4\n"
             "  支持楼栋: A-L栋\n"
             "\n"
             "/洗衣机查询 - 查询订阅位置状态\n"

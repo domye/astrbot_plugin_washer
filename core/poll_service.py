@@ -3,6 +3,7 @@
 """
 
 import asyncio
+import time
 from typing import Dict, Any, Set, Callable, Optional
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
@@ -13,14 +14,6 @@ from .subscription import SubscriptionManager
 
 
 class PollService:
-    """洗衣机状态轮询服务
-    
-    功能:
-    1. 持续轮询已订阅用户的洗衣机状态
-    2. 检测到空闲时立即通知用户
-    3. 支持动态添加/移除轮询目标
-    """
-
     def __init__(
         self,
         api_client: WasherApiClient,
@@ -35,11 +28,9 @@ class PollService:
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
-        self._device_states: Dict[str, Dict[int, int]] = {}
-        self._pending_notifications: Dict[str, Set[str]] = {}
+        self._reminder_tasks: Dict[str, asyncio.Task] = {}
 
     def start(self):
-        """启动轮询服务"""
         if self._running:
             return
         self._running = True
@@ -47,7 +38,6 @@ class PollService:
         logger.info("[Washer] 轮询服务已启动")
 
     async def stop(self):
-        """停止轮询服务"""
         self._running = False
         if self._task and not self._task.done():
             self._task.cancel()
@@ -55,16 +45,16 @@ class PollService:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        for key, task in self._reminder_tasks.items():
+            if not task.done():
+                task.cancel()
+        self._reminder_tasks.clear()
         logger.info("[Washer] 轮询服务已停止")
 
-    def _get_device_key(self, position_id: str, device_id: int) -> str:
-        return f"{position_id}:{device_id}"
-
     async def _poll_loop(self):
-        """轮询循环"""
         while self._running:
             try:
-                await self._poll_all_sessions()
+                await self._check_reminders()
                 await asyncio.sleep(self.default_interval)
             except asyncio.CancelledError:
                 break
@@ -72,73 +62,76 @@ class PollService:
                 logger.error(f"[Washer] 轮询异常: {e}")
                 await asyncio.sleep(10)
 
-    async def _poll_all_sessions(self):
-        """轮询所有会话"""
+    async def _check_reminders(self):
         enabled_sessions = await self.subscription_mgr.get_all_enabled_sessions()
-
         for session_id, session_data in enabled_sessions.items():
-            try:
-                await self._poll_session(session_id, session_data)
-            except Exception as e:
-                logger.error(f"[Washer] 轮询会话 {session_id} 失败: {e}")
+            subscriptions = session_data.get("subscriptions", {})
+            for user_id, sub in subscriptions.items():
+                reminder = await self.subscription_mgr.get_reminder(session_id, user_id)
+                if not reminder:
+                    continue
+                remind_at = reminder.get("remind_at", 0)
+                if time.time() >= remind_at:
+                    await self._send_reminder(session_id, user_id, sub, reminder)
+                    await self.subscription_mgr.remove_reminder(session_id, user_id)
 
-    async def _poll_session(
-        self, session_id: str, session_data: Dict[str, Any]
-    ):
-        """轮询单个会话"""
-        subscriptions = session_data.get("subscriptions", {})
-        if not subscriptions:
-            return
-
-        for user_id, sub in subscriptions.items():
-            position_id = sub.get("position_id")
-            floor_code = sub.get("floor_code")
-            building_filter = sub.get("building_filter", "")
-            building_name = sub.get("building_name", "")
-
-            if not position_id or not floor_code:
-                continue
-
-            status = await self.api_client.check_floor_status(
-                position_id, floor_code, building_filter
-            )
-            available_devices = status.get("available_devices", [])
-
-            if available_devices:
-                await self._notify_user(
-                    session_id, user_id, building_name, available_devices
-                )
-
-    async def _notify_user(
+    async def _send_reminder(
         self,
         session_id: str,
         user_id: str,
-        building_name: str,
-        available_devices: list,
+        subscription: Dict[str, Any],
+        reminder: Dict[str, Any],
     ):
-        """通知用户有空闲洗衣机"""
-        device_names = [d.name for d in available_devices]
-        msg = (
-            f"【洗衣机空闲提醒】\n"
-            f"位置: {building_name}\n"
-            f"空闲洗衣机: {len(available_devices)}台\n"
-            f"设备: {', '.join(device_names)}\n"
-            f"请尽快前往使用!"
+        position_id = subscription.get("position_id")
+        floor_code = subscription.get("floor_code")
+        building_filter = subscription.get("building_filter", "")
+        building_name = subscription.get("building_name", "")
+        device_name = reminder.get("device_name", "")
+
+        status = await self.api_client.check_floor_status(
+            position_id, floor_code, building_filter
         )
+        devices = status.get("devices", [])
+        available_devices = [d for d in devices if d.is_available]
 
         chain = MessageChain()
         chain.at(user_id)
-        chain.message(f"\n{msg}")
+        
+        if available_devices:
+            available_names = [d.name for d in available_devices]
+            chain.message(
+                f"\n【洗衣机空闲提醒】\n"
+                f"位置: {building_name}\n"
+                f"空闲洗衣机: {len(available_devices)}台\n"
+                f"设备: {', '.join(available_names)}\n"
+                f"请尽快前往使用!"
+            )
+        else:
+            chain.message(
+                f"\n【洗衣机提醒】\n"
+                f"位置: {building_name}\n"
+                f"{device_name} 应该已经空闲了，但当前检测到仍在使用\n"
+                f"请前往确认或稍后重试 /洗衣机查询"
+            )
 
         try:
             await self.send_message(session_id, chain)
-            logger.info(f"[Washer] 已通知用户 {user_id} 洗衣机空闲")
+            logger.info(f"[Washer] 已发送定时提醒给用户 {user_id}")
         except Exception as e:
-            logger.error(f"[Washer] 通知用户 {user_id} 失败: {e}")
+            logger.error(f"[Washer] 发送定时提醒失败: {e}")
 
-    async def check_and_notify(
-        self, session_id: str, user_id: str, position_id: str, floor_code: str
-    ) -> Dict[str, Any]:
-        """立即检查并返回结果（用于用户主动查询）"""
-        status = await self.api_client.check_floor_status(position_id, floor_code)
-        return status
+    async def schedule_reminder(
+        self,
+        session_id: str,
+        user_id: str,
+        device_name: str,
+        remaining_seconds: int,
+    ):
+        remind_at = time.time() + remaining_seconds + 30
+        await self.subscription_mgr.set_reminder(
+            session_id, user_id, device_name, remind_at
+        )
+        logger.info(
+            f"[Washer] 已为用户 {user_id} 设置定时提醒: {device_name}, "
+            f"{remaining_seconds + 30}秒后"
+        )

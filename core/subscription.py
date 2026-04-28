@@ -165,3 +165,49 @@ class SubscriptionManager(AsyncDataManager):
                         "poll_interval": session_data.get("poll_interval", 60),
                     }
             return result
+
+    async def set_reminder(
+        self,
+        session_id: str,
+        user_id: str,
+        device_name: str,
+        remind_at: float,
+    ) -> None:
+        async with self.lock:
+            sid = str(session_id)
+            uid = str(user_id)
+            if sid not in self.data:
+                self.data[sid] = {
+                    "subscriptions": {},
+                    "poll_enabled": True,
+                    "poll_interval": 60,
+                    "reminders": {},
+                }
+            if "reminders" not in self.data[sid]:
+                self.data[sid]["reminders"] = {}
+            self.data[sid]["reminders"][uid] = {
+                "device_name": device_name,
+                "remind_at": remind_at,
+            }
+            await self._save()
+
+    async def get_reminder(
+        self, session_id: str, user_id: str
+    ) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            session_data = self.data.get(str(session_id), {})
+            reminders = session_data.get("reminders", {})
+            return copy.deepcopy(reminders.get(str(user_id)))
+
+    async def remove_reminder(self, session_id: str, user_id: str) -> bool:
+        async with self.lock:
+            sid = str(session_id)
+            uid = str(user_id)
+            if sid not in self.data:
+                return False
+            reminders = self.data[sid].get("reminders", {})
+            if uid in reminders:
+                del reminders[uid]
+                await self._save()
+                return True
+            return False

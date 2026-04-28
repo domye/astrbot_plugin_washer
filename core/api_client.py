@@ -5,6 +5,7 @@
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import httpx
+from datetime import datetime, timedelta
 from astrbot.api import logger
 
 
@@ -23,16 +24,43 @@ class WasherDevice:
 
     @property
     def is_available(self) -> bool:
-        return self.state in (0, 2)
+        return self.state == 1
+
+    @property
+    def remaining_seconds(self) -> Optional[int]:
+        if self.state != 2 or not self.finish_time:
+            return None
+        try:
+            finish_dt = datetime.fromisoformat(self.finish_time.replace("Z", "+00:00"))
+            now = datetime.now(finish_dt.tzinfo) if finish_dt.tzinfo else datetime.now()
+            remaining = (finish_dt - now).total_seconds()
+            return max(0, int(remaining))
+        except Exception:
+            return None
+
+    @property
+    def remaining_time_text(self) -> str:
+        seconds = self.remaining_seconds
+        if seconds is None:
+            return ""
+        if seconds == 0:
+            return "即将完成"
+        minutes = seconds // 60
+        if minutes < 1:
+            return f"剩余{seconds}秒"
+        return f"剩余约{minutes}分钟"
 
     @property
     def status_text(self) -> str:
-        if self.state == 0:
+        if self.state == 1:
             return "空闲"
-        elif self.state == 1:
-            return "使用中"
         elif self.state == 2:
-            return "已完成"
+            remaining = self.remaining_time_text
+            if remaining:
+                return f"使用中({remaining})"
+            return "使用中"
+        elif self.state == 0:
+            return "离线"
         else:
             return f"状态{self.state}"
 
