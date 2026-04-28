@@ -1,1 +1,6 @@
-{}
+name: astrbot_plugin_washer
+display_name: 公共洗衣机订阅通知
+desc: 海尔洗衣机状态订阅插件，支持精确订阅楼栋/楼层，自动轮询空闲通知
+version: "1.0.0"
+author: domye
+repo: https://github.com/astrbot/astrbot_plugin_washer
