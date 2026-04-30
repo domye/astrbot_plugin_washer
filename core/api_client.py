@@ -24,11 +24,11 @@ class WasherDevice:
 
     @property
     def is_available(self) -> bool:
-        return self.state == 1
+        return self.state == 1 or self.state == 3
 
     @property
     def remaining_seconds(self) -> Optional[int]:
-        if self.state != 2 or not self.finish_time:
+        if self.state not in (2, 3) or not self.finish_time:
             return None
         try:
             finish_dt = datetime.fromisoformat(self.finish_time.replace("Z", "+00:00"))
@@ -59,6 +59,8 @@ class WasherDevice:
             if remaining:
                 return f"使用中({remaining})"
             return "使用中"
+        elif self.state == 3:
+            return "已完成，待取衣"
         elif self.state == 0:
             return "离线"
         else:
